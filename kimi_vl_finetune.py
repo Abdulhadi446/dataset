@@ -11,6 +11,7 @@ from datasets import Dataset
 import transformers
 from transformers import (
     AutoTokenizer,
+    AutoConfig,
     TrainingArguments,
     activations,
 )
@@ -72,8 +73,18 @@ tokenizer = AutoTokenizer.from_pretrained(
 )
 
 print("\n--- Loading model with QLoRA (4-bit) ---")
+model_config = AutoConfig.from_pretrained(
+    model_id,
+    trust_remote_code=True,
+    token=HF_TOKEN,
+)
+if hasattr(model_config, "rope_scaling") and isinstance(model_config.rope_scaling, dict):
+    rs = model_config.rope_scaling
+    if "type" not in rs and "rope_type" in rs:
+        rs["type"] = rs["rope_type"]
 model, tokenizer = unsloth.FastModel.from_pretrained(
     model_name=model_id,
+    config=model_config,
     max_seq_length=4096,
     dtype=torch.float16,
     load_in_4bit=True,
