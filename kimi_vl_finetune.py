@@ -1,9 +1,8 @@
 import os
-os.environ["WANDB_DISABLED"] = "true"
-os.environ["TRL_USE_WANDB"] = "false"
 
 import unsloth
 import torch
+import torch.nn as nn
 import json
 import gc
 from huggingface_hub import hf_hub_download, HfApi
@@ -13,10 +12,19 @@ from transformers import (
     BitsAndBytesConfig,
     AutoModelForCausalLM,
     TrainingArguments,
+    activations,
 )
 from trl import SFTTrainer
 from peft import LoraConfig, PeftModel
 from accelerate import Accelerator
+
+if not hasattr(activations, "PytorchGELUTanh"):
+    class PytorchGELUTanh(nn.Module):
+        def __init__(self):
+            super().__init__()
+        def forward(self, input):
+            return torch.nn.functional.gelu(input)
+    activations.PytorchGELUTanh = PytorchGELUTanh
 
 print(f"CUDA available: {torch.cuda.is_available()}")
 print(f"GPU count: {torch.cuda.device_count()}")
