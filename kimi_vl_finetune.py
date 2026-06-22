@@ -82,16 +82,9 @@ def _fix_rope_scaling(cfg):
     if not hasattr(cfg, "rope_scaling") or not isinstance(cfg.rope_scaling, dict):
         return
     rs = cfg.rope_scaling
-    if "type" not in rs:
-        for k in ("rope_type", "scaling_type", "class"):
-            if k in rs:
-                rs["type"] = rs[k]
-                break
-        else:
-            str_vals = [v for v in rs.values() if isinstance(v, str)]
-            rs["type"] = str_vals[0] if str_vals else "linear"
-    if "factor" not in rs:
-        rs["factor"] = rs.get("scaling_factor", 1.0)
+    if "type" in rs and "factor" in rs:
+        return
+    cfg.rope_scaling = {"type": "linear", "factor": 1.0}
 
 _fix_rope_scaling(model_config)
 if hasattr(model_config, "text_config"):
