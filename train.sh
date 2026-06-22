@@ -2,7 +2,7 @@
 set -euo pipefail
 
 echo "=== Installing dependencies ==="
-pip install -U -q pip
+pip install -U -q pip >/dev/null 2>&1
 pip install -U -q \
     unsloth \
     "transformers<5" \
@@ -15,9 +15,9 @@ pip install -U -q \
     xformers \
     triton \
     sentencepiece \
-    protobuf
+    protobuf >/dev/null 2>&1
 
-pip uninstall -y wandb 2>/dev/null || true
+pip uninstall -y wandb >/dev/null 2>&1 || true
 
 echo ""
 echo "=== Starting fine-tuning ==="
