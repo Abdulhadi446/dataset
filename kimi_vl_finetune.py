@@ -1,9 +1,5 @@
 import os
 import sys
-from unittest.mock import MagicMock
-
-if "wandb" not in sys.modules:
-    sys.modules["wandb"] = MagicMock()
 
 import unsloth
 import torch
