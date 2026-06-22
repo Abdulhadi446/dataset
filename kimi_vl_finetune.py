@@ -1,16 +1,4 @@
 import os
-import subprocess
-import sys
-
-def install_deps():
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "-U", "pip"])
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "-U",
-        "unsloth", "transformers", "trl", "peft", "accelerate", "bitsandbytes",
-        "huggingface_hub", "torch", "torchvision", "torchaudio", "xformers",
-        "triton", "sentencepiece", "protobuf"])
-
-install_deps()
-
 import torch
 import json
 import gc
