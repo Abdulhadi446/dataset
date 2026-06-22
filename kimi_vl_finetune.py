@@ -78,10 +78,25 @@ model_config = AutoConfig.from_pretrained(
     trust_remote_code=True,
     token=HF_TOKEN,
 )
-if hasattr(model_config, "rope_scaling") and isinstance(model_config.rope_scaling, dict):
-    rs = model_config.rope_scaling
-    if "type" not in rs and "rope_type" in rs:
-        rs["type"] = rs["rope_type"]
+def _fix_rope_scaling(cfg):
+    if not hasattr(cfg, "rope_scaling") or not isinstance(cfg.rope_scaling, dict):
+        return
+    rs = cfg.rope_scaling
+    if "type" in rs:
+        return
+    for k in ("rope_type", "scaling_type", "class"):
+        if k in rs:
+            rs["type"] = rs[k]
+            return
+    str_vals = [v for v in rs.values() if isinstance(v, str)]
+    if str_vals:
+        rs["type"] = str_vals[0]
+
+_fix_rope_scaling(model_config)
+if hasattr(model_config, "text_config"):
+    _fix_rope_scaling(model_config.text_config)
+if hasattr(model_config, "vision_config"):
+    _fix_rope_scaling(model_config.vision_config)
 model, tokenizer = unsloth.FastModel.from_pretrained(
     model_name=model_id,
     config=model_config,
