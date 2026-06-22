@@ -37,7 +37,13 @@ if not hasattr(activations, "PytorchGELUTanh"):
 
 from transformers.cache_utils import DynamicCache
 if not hasattr(DynamicCache, "get_usable_length"):
-    DynamicCache.get_usable_length = lambda self, seq_len, layer_idx=None: self.get_seq_length()
+    def _get_usable_length(self, seq_len, layer_idx=None):
+        if layer_idx is not None:
+            if len(self.key_cache) <= layer_idx:
+                return 0
+            return self.key_cache[layer_idx].shape[-2]
+        return self.get_seq_length()
+    DynamicCache.get_usable_length = _get_usable_length
 
 accelerator = Accelerator()
 
