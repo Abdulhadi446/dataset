@@ -1,4 +1,7 @@
 import os
+os.environ["WANDB_DISABLED"] = "true"
+os.environ["TRL_USE_WANDB"] = "false"
+
 import torch
 import json
 import gc

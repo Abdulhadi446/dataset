@@ -2,8 +2,8 @@
 set -euo pipefail
 
 echo "=== Installing dependencies ==="
-pip install -U pip
-pip install -U \
+pip install -U -q pip
+pip install -U -q \
     unsloth \
     transformers \
     trl \
