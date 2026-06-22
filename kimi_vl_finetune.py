@@ -37,6 +37,30 @@ if not hasattr(activations, "PytorchGELUTanh"):
     activations.PytorchGELUTanh = PytorchGELUTanh
 
 import transformers.modeling_utils as _mu
+if hasattr(_mu.PreTrainedModel, "_finalize_model_loading"):
+    _orig_finalize = _mu.PreTrainedModel.__dict__["_finalize_model_loading"]
+    if isinstance(_orig_finalize, classmethod):
+        _orig_finalize_fn = _orig_finalize.__func__
+    else:
+        _orig_finalize_fn = _orig_finalize
+
+    def _patched_finalize(*args, **kwargs):
+        if len(args) >= 4:
+            model = args[1]
+        elif len(args) >= 3:
+            model = args[0]
+        else:
+            return _orig_finalize_fn(*args, **kwargs)
+        orig_tie = model.tie_weights
+        def _tie_wrapper(**kw):
+            return orig_tie()
+        model.tie_weights = _tie_wrapper
+        try:
+            return _orig_finalize_fn(*args, **kwargs)
+        finally:
+            model.tie_weights = orig_tie
+    _mu.PreTrainedModel._finalize_model_loading = _patched_finalize
+
 _orig_init_weights = _mu.PreTrainedModel.init_weights
 def _patched_init_weights(self):
     orig_tie = self.tie_weights
