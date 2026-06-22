@@ -5,17 +5,14 @@ import torch
 import torch.nn as nn
 import json
 import gc
-from huggingface_hub import hf_hub_download, HfApi
+from huggingface_hub import HfApi
 from datasets import Dataset
 from transformers import (
     AutoTokenizer,
-    BitsAndBytesConfig,
-    AutoModelForCausalLM,
     TrainingArguments,
     activations,
 )
 from trl import SFTTrainer
-from peft import LoraConfig, PeftModel
 from accelerate import Accelerator
 
 if not hasattr(activations, "PytorchGELUTanh"):
@@ -25,6 +22,8 @@ if not hasattr(activations, "PytorchGELUTanh"):
         def forward(self, input):
             return torch.nn.functional.gelu(input)
     activations.PytorchGELUTanh = PytorchGELUTanh
+
+accelerator = Accelerator()
 
 print(f"CUDA available: {torch.cuda.is_available()}")
 print(f"GPU count: {torch.cuda.device_count()}")
@@ -59,34 +58,27 @@ tokenizer = AutoTokenizer.from_pretrained(
     trust_remote_code=True,
 )
 
-print("\n--- Loading model with Unsloth FastModel ---")
+print("\n--- Loading model in FP16 (full fine-tuning) ---")
 model = None
 try:
     from unsloth import FastModel
     model, tokenizer = FastModel.from_pretrained(
         model_name=model_id,
         max_seq_length=4096,
-        dtype=torch.bfloat16,
-        load_in_4bit=True,
+        dtype=torch.float16,
+        load_in_4bit=False,
         trust_remote_code=True,
         token=HF_TOKEN,
     )
     print("Unsloth FastModel loaded successfully")
 except Exception as e:
-    print(f"Unsloth FastModel failed ({e}), falling back to standard BitsAndBytes")
+    print(f"Unsloth FastModel failed ({e}), loading with standard transformers")
     gc.collect()
     torch.cuda.empty_cache()
-
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4",
-    )
+    from transformers import AutoModelForCausalLM
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
-        quantization_config=bnb_config,
-        torch_dtype=torch.bfloat16,
+        torch_dtype=torch.float16,
         device_map="auto",
         trust_remote_code=True,
         token=HF_TOKEN,
@@ -98,33 +90,10 @@ def print_gpu_mem(label=""):
     print(f"  [GPU] {label} — allocated: {allocated:.2f} GB, reserved: {reserved:.2f} GB")
 
 print_gpu_mem("after model load")
+model.print_trainable_parameters() if hasattr(model, "print_trainable_parameters") else None
 
-print("\n--- Applying QLoRA ---")
-lora_config = LoraConfig(
-    r=16,
-    lora_alpha=32,
-    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-    lora_dropout=0.05,
-    bias="none",
-    task_type="CAUSAL_LM",
-)
-
-try:
-    from unsloth import FastModel
-    model = FastModel.get_peft_model(
-        model,
-        r=16,
-        lora_alpha=32,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-        lora_dropout=0.05,
-        bias="none",
-        use_gradient_checkpointing="unsloth",
-    )
-    print("Unsloth get_peft_model applied")
-except (NameError, AttributeError):
-    from peft import get_peft_model
-    model = get_peft_model(model, lora_config)
-    print("PEFT get_peft_model applied (fallback)")
+print(f"Total parameters: {sum(p.numel() for p in model.parameters()):,}")
+print(f"Trainable parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
 
 print("\n--- Preparing dataset ---")
 def convert_thinking(text):
@@ -179,29 +148,24 @@ if len(records) > 0:
     print(records[0]["text"][:300])
 
 dataset = Dataset.from_list(records)
-print(f"Dataset size: {len(dataset)}")
 
-def tokenize_function(examples):
-    return tokenizer(
-        examples["text"],
-        max_length=4096,
-        truncation=True,
-        padding=False,
-        return_tensors=None,
-    )
+# Detect decoder layer class for FSDP auto_wrap policy
+layer_cls = None
+if hasattr(model, "model") and hasattr(model.model, "layers"):
+    layer_cls = type(model.model.layers[0]).__name__
+    print(f"Detected decoder layer class: {layer_cls}")
 
-tokenized_dataset = dataset.map(tokenize_function, batched=False, remove_columns=["text"])
-
-print("\n--- Setting up SFTTrainer ---")
+print("\n--- Setting up TrainingArguments with FSDP ---")
 training_args = TrainingArguments(
     output_dir="/kaggle/working/checkpoints",
     num_train_epochs=1,
-    per_device_train_batch_size=2,
-    gradient_accumulation_steps=4,
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=8,
     learning_rate=2e-4,
     warmup_ratio=0.03,
     lr_scheduler_type="cosine",
-    bf16=True,
+    bf16=False,
+    fp16=True,
     logging_steps=10,
     save_steps=500,
     save_total_limit=2,
@@ -211,20 +175,29 @@ training_args = TrainingArguments(
     gradient_checkpointing_kwargs={"use_reentrant": False},
     dataloader_num_workers=2,
     ddp_find_unused_parameters=False,
+    fsdp=["full_shard", "auto_wrap"],
+    fsdp_config={
+        "transformer_layer_cls_to_wrap": [layer_cls] if layer_cls else [],
+        "sharding_strategy": "FULL_SHARD",
+        "activation_checkpointing": True,
+    } if layer_cls else {
+        "sharding_strategy": "FULL_SHARD",
+        "activation_checkpointing": True,
+    },
 )
 
 trainer = SFTTrainer(
     model=model,
     tokenizer=tokenizer,
     args=training_args,
-    train_dataset=tokenized_dataset,
+    train_dataset=dataset,
     max_seq_length=4096,
     dataset_text_field="text",
 )
 
-print(f"Trainable parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
+print(f"\nTrainable parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
 
-print("\n--- Starting training ---")
+print("\n--- Starting full fine-tuning ---")
 try:
     trainer.train()
 except torch.cuda.OutOfMemoryError:
@@ -232,12 +205,12 @@ except torch.cuda.OutOfMemoryError:
     gc.collect()
     torch.cuda.empty_cache()
     training_args.per_device_train_batch_size = 1
-    training_args.gradient_accumulation_steps = 8
+    training_args.gradient_accumulation_steps = 16
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
         args=training_args,
-        train_dataset=tokenized_dataset,
+        train_dataset=dataset,
         max_seq_length=4096,
         dataset_text_field="text",
     )
@@ -245,9 +218,9 @@ except torch.cuda.OutOfMemoryError:
 
 print("\n--- Saving model ---")
 save_path = "/kaggle/working/kimi-vl-finetuned"
-trainer.model.save_pretrained(save_path)
+trainer.model.save_pretrained(save_path, safe_serialization=True)
 tokenizer.save_pretrained(save_path)
-print(f"Adapter saved to {save_path}")
+print(f"Model saved to {save_path}")
 
 print("\n--- Pushing to HuggingFace Hub ---")
 if HF_TOKEN:
