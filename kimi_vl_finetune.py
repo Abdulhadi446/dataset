@@ -2,6 +2,7 @@ import os
 os.environ["WANDB_DISABLED"] = "true"
 os.environ["TRL_USE_WANDB"] = "false"
 
+import unsloth
 import torch
 import json
 import gc
