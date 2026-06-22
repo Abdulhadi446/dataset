@@ -36,6 +36,19 @@ if not hasattr(activations, "PytorchGELUTanh"):
             return torch.nn.functional.gelu(input)
     activations.PytorchGELUTanh = PytorchGELUTanh
 
+import transformers.modeling_utils as _mu
+_orig_init_weights = _mu.PreTrainedModel.init_weights
+def _patched_init_weights(self):
+    orig_tie = self.tie_weights
+    def _tie_wrapper(**kwargs):
+        return orig_tie()
+    self.tie_weights = _tie_wrapper
+    try:
+        _orig_init_weights(self)
+    finally:
+        self.tie_weights = orig_tie
+_mu.PreTrainedModel.init_weights = _patched_init_weights
+
 accelerator = Accelerator()
 
 print(f"CUDA available: {torch.cuda.is_available()}")
