@@ -5,7 +5,6 @@ echo "=== Installing dependencies ==="
 pip install -U -q pip >/dev/null 2>&1
 pip install -U -q \
     unsloth \
-    "transformers<5" \
     trl \
     peft \
     accelerate \

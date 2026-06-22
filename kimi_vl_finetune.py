@@ -35,16 +35,6 @@ if not hasattr(activations, "PytorchGELUTanh"):
             return torch.nn.functional.gelu(input)
     activations.PytorchGELUTanh = PytorchGELUTanh
 
-from transformers.cache_utils import DynamicCache
-if not hasattr(DynamicCache, "get_usable_length"):
-    def _get_usable_length(self, seq_len, layer_idx=None):
-        if layer_idx is not None:
-            if len(self.key_cache) <= layer_idx:
-                return 0
-            return self.key_cache[layer_idx].shape[-2]
-        return self.get_seq_length()
-    DynamicCache.get_usable_length = _get_usable_length
-
 accelerator = Accelerator()
 
 print(f"CUDA available: {torch.cuda.is_available()}")
@@ -78,6 +68,7 @@ model_id = "moonshotai/Kimi-VL-A3B-Instruct"
 tokenizer = AutoTokenizer.from_pretrained(
     model_id,
     trust_remote_code=True,
+    token=HF_TOKEN,
 )
 
 print("\n--- Loading model with QLoRA (4-bit) ---")
