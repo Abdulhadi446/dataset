@@ -5,12 +5,14 @@ from unittest.mock import MagicMock
 if "wandb" not in sys.modules:
     sys.modules["wandb"] = MagicMock()
 
+import unsloth
 import torch
 import torch.nn as nn
 import json
 import gc
 from huggingface_hub import HfApi
 from datasets import Dataset
+import transformers
 from transformers import (
     AutoTokenizer,
     TrainingArguments,
@@ -18,6 +20,16 @@ from transformers import (
 )
 from trl import SFTTrainer
 from accelerate import Accelerator
+
+import transformers.utils.import_utils as _iu
+if not hasattr(_iu, "is_torch_fx_available"):
+    def is_torch_fx_available():
+        try:
+            import torch.fx
+            return True
+        except ImportError:
+            return False
+    _iu.is_torch_fx_available = is_torch_fx_available
 
 if not hasattr(activations, "PytorchGELUTanh"):
     class PytorchGELUTanh(nn.Module):
@@ -63,8 +75,7 @@ tokenizer = AutoTokenizer.from_pretrained(
 )
 
 print("\n--- Loading model with QLoRA (4-bit) ---")
-from unsloth import FastModel
-model, tokenizer = FastModel.from_pretrained(
+model, tokenizer = unsloth.FastModel.from_pretrained(
     model_name=model_id,
     max_seq_length=4096,
     dtype=torch.bfloat16,
@@ -81,7 +92,7 @@ def print_gpu_mem(label=""):
 print_gpu_mem("after model load")
 
 print("\n--- Applying QLoRA ---")
-model = FastModel.get_peft_model(
+model = unsloth.FastModel.get_peft_model(
     model,
     r=32,
     lora_alpha=64,
