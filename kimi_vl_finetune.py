@@ -1,6 +1,4 @@
 import os
-
-import unsloth
 import torch
 import torch.nn as nn
 import json
@@ -58,31 +56,16 @@ tokenizer = AutoTokenizer.from_pretrained(
     trust_remote_code=True,
 )
 
-print("\n--- Loading model in FP16 (full fine-tuning) ---")
-model = None
-try:
-    from unsloth import FastModel
-    model, tokenizer = FastModel.from_pretrained(
-        model_name=model_id,
-        max_seq_length=4096,
-        dtype=torch.float16,
-        load_in_4bit=False,
-        trust_remote_code=True,
-        token=HF_TOKEN,
-    )
-    print("Unsloth FastModel loaded successfully")
-except Exception as e:
-    print(f"Unsloth FastModel failed ({e}), loading with standard transformers")
-    gc.collect()
-    torch.cuda.empty_cache()
-    from transformers import AutoModelForCausalLM
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id,
-        torch_dtype=torch.float16,
-        device_map="auto",
-        trust_remote_code=True,
-        token=HF_TOKEN,
-    )
+print("\n--- Loading model with QLoRA (4-bit) ---")
+from unsloth import FastModel
+model, tokenizer = FastModel.from_pretrained(
+    model_name=model_id,
+    max_seq_length=4096,
+    dtype=torch.bfloat16,
+    load_in_4bit=True,
+    trust_remote_code=True,
+    token=HF_TOKEN,
+)
 
 def print_gpu_mem(label=""):
     allocated = torch.cuda.memory_allocated() / 1e9
@@ -90,9 +73,19 @@ def print_gpu_mem(label=""):
     print(f"  [GPU] {label} — allocated: {allocated:.2f} GB, reserved: {reserved:.2f} GB")
 
 print_gpu_mem("after model load")
-model.print_trainable_parameters() if hasattr(model, "print_trainable_parameters") else None
 
-print(f"Total parameters: {sum(p.numel() for p in model.parameters()):,}")
+print("\n--- Applying QLoRA ---")
+model = FastModel.get_peft_model(
+    model,
+    r=16,
+    lora_alpha=32,
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+    lora_dropout=0.05,
+    bias="none",
+    use_gradient_checkpointing="unsloth",
+)
+print("QLoRA applied successfully")
+
 print(f"Trainable parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
 
 print("\n--- Preparing dataset ---")
@@ -149,41 +142,23 @@ if len(records) > 0:
 
 dataset = Dataset.from_list(records)
 
-# Detect decoder layer class for FSDP auto_wrap policy
-layer_cls = None
-if hasattr(model, "model") and hasattr(model.model, "layers"):
-    layer_cls = type(model.model.layers[0]).__name__
-    print(f"Detected decoder layer class: {layer_cls}")
-
-print("\n--- Setting up TrainingArguments with FSDP ---")
+print("\n--- Setting up training ---")
 training_args = TrainingArguments(
     output_dir="/kaggle/working/checkpoints",
     num_train_epochs=1,
-    per_device_train_batch_size=1,
-    gradient_accumulation_steps=8,
+    per_device_train_batch_size=2,
+    gradient_accumulation_steps=4,
     learning_rate=2e-4,
     warmup_ratio=0.03,
     lr_scheduler_type="cosine",
-    bf16=False,
-    fp16=True,
+    bf16=True,
     logging_steps=10,
     save_steps=500,
     save_total_limit=2,
     remove_unused_columns=False,
     report_to="none",
-    gradient_checkpointing=True,
-    gradient_checkpointing_kwargs={"use_reentrant": False},
     dataloader_num_workers=2,
     ddp_find_unused_parameters=False,
-    fsdp=["full_shard", "auto_wrap"],
-    fsdp_config={
-        "transformer_layer_cls_to_wrap": [layer_cls] if layer_cls else [],
-        "sharding_strategy": "FULL_SHARD",
-        "activation_checkpointing": True,
-    } if layer_cls else {
-        "sharding_strategy": "FULL_SHARD",
-        "activation_checkpointing": True,
-    },
 )
 
 trainer = SFTTrainer(
@@ -195,17 +170,15 @@ trainer = SFTTrainer(
     dataset_text_field="text",
 )
 
-print(f"\nTrainable parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
-
-print("\n--- Starting full fine-tuning ---")
+print("\n--- Starting QLoRA training ---")
 try:
     trainer.train()
 except torch.cuda.OutOfMemoryError:
-    print("OOM during training! Attempting recovery with smaller batch...")
+    print("OOM! Retrying with smaller batch...")
     gc.collect()
     torch.cuda.empty_cache()
     training_args.per_device_train_batch_size = 1
-    training_args.gradient_accumulation_steps = 16
+    training_args.gradient_accumulation_steps = 8
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
@@ -218,9 +191,9 @@ except torch.cuda.OutOfMemoryError:
 
 print("\n--- Saving model ---")
 save_path = "/kaggle/working/kimi-vl-finetuned"
-trainer.model.save_pretrained(save_path, safe_serialization=True)
+trainer.model.save_pretrained(save_path)
 tokenizer.save_pretrained(save_path)
-print(f"Model saved to {save_path}")
+print(f"Adapter saved to {save_path}")
 
 print("\n--- Pushing to HuggingFace Hub ---")
 if HF_TOKEN:
