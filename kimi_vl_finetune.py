@@ -1,4 +1,10 @@
 import os
+import sys
+from unittest.mock import MagicMock
+
+if "wandb" not in sys.modules:
+    sys.modules["wandb"] = MagicMock()
+
 import torch
 import torch.nn as nn
 import json

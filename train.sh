@@ -17,8 +17,6 @@ pip install -U -q \
     sentencepiece \
     protobuf >/dev/null 2>&1
 
-pip uninstall -y wandb >/dev/null 2>&1 || true
-
 echo ""
 echo "=== Starting fine-tuning ==="
 python kimi_vl_finetune.py
