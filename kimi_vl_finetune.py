@@ -35,6 +35,10 @@ if not hasattr(activations, "PytorchGELUTanh"):
             return torch.nn.functional.gelu(input)
     activations.PytorchGELUTanh = PytorchGELUTanh
 
+from transformers.cache_utils import DynamicCache
+if not hasattr(DynamicCache, "get_usable_length"):
+    DynamicCache.get_usable_length = lambda self, seq_len: self.get_seq_length()
+
 accelerator = Accelerator()
 
 print(f"CUDA available: {torch.cuda.is_available()}")
