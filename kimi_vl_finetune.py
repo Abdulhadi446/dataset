@@ -77,9 +77,12 @@ print_gpu_mem("after model load")
 print("\n--- Applying QLoRA ---")
 model = FastModel.get_peft_model(
     model,
-    r=16,
-    lora_alpha=32,
-    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+    r=32,
+    lora_alpha=64,
+    target_modules=[
+        "q_proj", "k_proj", "v_proj", "o_proj",
+        "gate_proj", "up_proj", "down_proj",
+    ],
     lora_dropout=0.05,
     bias="none",
     use_gradient_checkpointing="unsloth",
